@@ -118,7 +118,7 @@ func (c *HTTPClient) Complete(ctx context.Context, req models.ChatRequest) (*mod
 	if err != nil {
 		return nil, fmt.Errorf("call %s llm: %w", c.name, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {

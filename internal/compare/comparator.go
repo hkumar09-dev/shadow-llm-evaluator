@@ -130,7 +130,8 @@ func compactJSON(raw []byte) json.RawMessage {
 func extractEmbeddedJSON(s string) json.RawMessage {
 	startObj := strings.Index(s, "{")
 	startArr := strings.Index(s, "[")
-	start := -1
+
+	var start int
 	switch {
 	case startObj >= 0 && startArr >= 0:
 		if startObj < startArr {
