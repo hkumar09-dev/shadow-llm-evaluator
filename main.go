@@ -60,6 +60,7 @@ func main() {
 	)
 
 	primaryHandler := handler.NewPrimaryHandler(primary, shadowRunner, logger)
+	healthHandler := handler.NewHealthHandler(cfg.AppEnv)
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
@@ -67,9 +68,11 @@ func main() {
 
 	r.POST("/simulate/primary", simulator.PrimaryHandler(primarySim))
 	r.POST("/v1/primary", primaryHandler.Handle)
-	r.GET("/healthz", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
-	})
+
+	// Health checks (DigitalOcean App Platform uses /healthz).
+	r.GET("/healthz", healthHandler.Live)
+	r.GET("/health", healthHandler.Live)
+	r.GET("/ready", healthHandler.Ready)
 
 	logger.Info("server starting",
 		"app_env", cfg.AppEnv,
