@@ -1,0 +1,24 @@
+[Unit]
+Description=shadow-llm-evaluator API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=shadowllm
+Group=shadowllm
+WorkingDirectory=/opt/shadow-llm-evaluator
+Environment=APP_ENV=local
+Environment=ENV_DIR=/opt/shadow-llm-evaluator/env
+EnvironmentFile=-/etc/shadow-llm-evaluator.env
+ExecStart=/opt/shadow-llm-evaluator/shadow-llm-evaluator
+Restart=on-failure
+RestartSec=3
+LimitNOFILE=65535
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

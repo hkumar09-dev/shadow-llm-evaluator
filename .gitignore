@@ -11,3 +11,4 @@ shadow-llm-evaluator
 .idea/
 .vscode/
 .DS_Store
+bin/
