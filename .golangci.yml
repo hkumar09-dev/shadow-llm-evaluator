@@ -1,8 +1,11 @@
-# golangci-lint configuration for quality job in CI
+# golangci-lint v2 config (required for Go 1.26+)
+version: "2"
+
 run:
   timeout: 5m
 
 linters:
+  default: none
   enable:
     - errcheck
     - govet
@@ -11,13 +14,10 @@ linters:
     - unused
     - misspell
     - unconvert
-    - gosimple
-
-linters-settings:
-  misspell:
-    locale: US
+  settings:
+    misspell:
+      locale: US
 
 issues:
-  exclude-use-default: false
   max-issues-per-linter: 0
   max-same-issues: 0

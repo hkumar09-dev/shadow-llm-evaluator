@@ -30,10 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -50,16 +50,16 @@ jobs:
       - name: Go vet
         run: go vet ./...
 
+      # v9 = Node 24 runtime; golangci-lint >= v2.9 supports Go 1.26
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.64.8
+          version: v2.11.4
           args: --timeout=5m
 
       - name: Validate DigitalOcean app spec (schema)
         uses: digitalocean/action-doctl@v2
         with:
-          # Schema-only validation does not need a real token.
           token: "unused"
           no_auth: true
 
@@ -71,10 +71,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
           cache: true
@@ -109,13 +109,11 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deploy App Platform app
         uses: digitalocean/app_action/deploy@v2
         env:
-          # Substituted into .do/app.yaml SECRET env var MODEL_ACCESS_KEY at deploy time
-          # when the spec references ${MODEL_ACCESS_KEY} — we pass it via action env.
           MODEL_ACCESS_KEY: ${{ secrets.MODEL_ACCESS_KEY }}
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
