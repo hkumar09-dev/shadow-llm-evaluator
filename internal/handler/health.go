@@ -1,38 +1,51 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"time"
 
 	"github.com/gin-gonic/gin"
 )
 
-// HealthHandler serves liveness and readiness probes for load balancers
-// and DigitalOcean App Platform health checks.
+// HealthHandler serves liveness and readiness probes.
 type HealthHandler struct {
+	appCtx    context.Context
 	appEnv    string
 	startedAt time.Time
 }
 
-// NewHealthHandler constructs a health handler with the current app environment.
-func NewHealthHandler(appEnv string) *HealthHandler {
+// NewHealthHandler constructs a health handler with the root app context.
+func NewHealthHandler(appCtx context.Context, appEnv string) *HealthHandler {
+	if appCtx == nil {
+		appCtx = context.Background()
+	}
 	return &HealthHandler{
+		appCtx:    appCtx,
 		appEnv:    appEnv,
 		startedAt: time.Now().UTC(),
 	}
 }
 
-// healthResponse is the JSON body returned by health endpoints.
 type healthResponse struct {
-	Health    string `json:"health"` // "healthy" when the service is working
+	Health    string `json:"health"`
 	Status    string `json:"status"`
 	AppEnv    string `json:"app_env,omitempty"`
 	UptimeSec int64  `json:"uptime_seconds"`
 }
 
 // Live handles GET /healthz and GET /health.
-// Used as a liveness probe: process is up and serving HTTP.
 func (h *HealthHandler) Live(c *gin.Context) {
+	ctx := c.Request.Context()
+	if err := ctx.Err(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, healthResponse{Health: "unhealthy", Status: "canceled"})
+		return
+	}
+	if err := h.appCtx.Err(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, healthResponse{Health: "unhealthy", Status: "shutting_down"})
+		return
+	}
+
 	c.JSON(http.StatusOK, healthResponse{
 		Health:    "healthy",
 		Status:    "ok",
@@ -42,8 +55,17 @@ func (h *HealthHandler) Live(c *gin.Context) {
 }
 
 // Ready handles GET /ready.
-// Used as a readiness probe: safe to receive traffic.
 func (h *HealthHandler) Ready(c *gin.Context) {
+	ctx := c.Request.Context()
+	if err := ctx.Err(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, healthResponse{Health: "unhealthy", Status: "canceled"})
+		return
+	}
+	if err := h.appCtx.Err(); err != nil {
+		c.JSON(http.StatusServiceUnavailable, healthResponse{Health: "unhealthy", Status: "shutting_down"})
+		return
+	}
+
 	c.JSON(http.StatusOK, healthResponse{
 		Health:    "healthy",
 		Status:    "ready",

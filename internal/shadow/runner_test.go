@@ -13,8 +13,6 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/shadow"
 )
 
-// stubCompleter is a fake llm.Completer used only in tests.
-// It waits for `delay`, then either returns resp or reports that ctx was canceled.
 type stubCompleter struct {
 	sawCanceled atomic.Bool
 	delay       time.Duration
@@ -30,15 +28,13 @@ func (s *stubCompleter) Complete(ctx context.Context, _ models.ChatRequest) (*mo
 		}
 		return s.resp, nil
 	case <-ctx.Done():
-		// Context canceled/timed out before delay finished.
 		s.sawCanceled.Store(true)
 		return nil, ctx.Err()
 	}
 }
 
-// TestEvaluateAsync_survivesRequestCancel proves the core shadow guarantee:
-// canceling the HTTP request context must NOT cancel the candidate call.
 func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
+	appCtx := context.Background()
 	candidate := &stubCompleter{
 		delay: 150 * time.Millisecond,
 		resp: &models.ChatResponse{
@@ -50,8 +46,9 @@ func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
 	}
 
 	runner := shadow.NewRunner(
+		appCtx,
 		candidate,
-		compare.NewContentComparator(),
+		compare.NewContentComparator(appCtx),
 		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 		shadow.WithTimeout(2*time.Second),
 	)
@@ -68,7 +65,6 @@ func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
 		Messages: []models.Message{{Role: "user", Content: "hi"}},
 	}, primary)
 
-	// Simulate client disconnect right after the primary response was sent.
 	cancel()
 	runner.Wait()
 
@@ -77,17 +73,17 @@ func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
 	}
 }
 
-// TestEvaluateAsync_respectsDetachedTimeout proves shadow work is still bounded:
-// WithoutCancel removes client cancel, but WithTimeout still stops hung candidates.
 func TestEvaluateAsync_respectsDetachedTimeout(t *testing.T) {
+	appCtx := context.Background()
 	candidate := &stubCompleter{
-		delay: 500 * time.Millisecond, // longer than shadow timeout below
+		delay: 500 * time.Millisecond,
 		resp:  &models.ChatResponse{Model: "candidate"},
 	}
 
 	runner := shadow.NewRunner(
+		appCtx,
 		candidate,
-		compare.NewContentComparator(),
+		compare.NewContentComparator(appCtx),
 		slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})),
 		shadow.WithTimeout(50*time.Millisecond),
 	)

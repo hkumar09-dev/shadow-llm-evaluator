@@ -1,6 +1,7 @@
 package compare_test
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -8,27 +9,25 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// TestContentComparator_equal checks the happy path: identical contents → Equal.
 func TestContentComparator_equal(t *testing.T) {
-	c := compare.NewContentComparator()
+	ctx := context.Background()
+	c := compare.NewContentComparator(ctx)
 	a := response("primary-sim", `{"answer":1}`)
 	b := response("candidate-sim", `{"answer":1}`)
 
-	res := c.Compare(a, b)
+	res := c.Compare(ctx, a, b)
 	if !res.Equal {
 		t.Fatalf("expected equal contents")
 	}
 }
 
-// TestContentComparator_mismatchBuildsCleanJSONPayloads verifies that on mismatch
-// we get structured JSON payloads including extracted_json from each side.
 func TestContentComparator_mismatchBuildsCleanJSONPayloads(t *testing.T) {
-	c := compare.NewContentComparator()
-	// Primary embeds JSON inside prose; candidate is pure JSON — both should extract.
+	ctx := context.Background()
+	c := compare.NewContentComparator(ctx)
 	a := response("primary-sim", `prefix {"answer":1,"ok":true}`)
 	b := response("candidate-sim", `{"answer":2,"ok":false}`)
 
-	res := c.Compare(a, b)
+	res := c.Compare(ctx, a, b)
 	if res.Equal {
 		t.Fatalf("expected mismatch")
 	}
@@ -58,7 +57,6 @@ func TestContentComparator_mismatchBuildsCleanJSONPayloads(t *testing.T) {
 	}
 }
 
-// response is a tiny helper to build ChatResponse values in tests.
 func response(model, content string) *models.ChatResponse {
 	return &models.ChatResponse{
 		Model: model,

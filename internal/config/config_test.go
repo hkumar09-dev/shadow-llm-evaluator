@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,7 +32,7 @@ func TestLoad_localEnvFile(t *testing.T) {
 	t.Setenv("APP_ENV", "local")
 	t.Setenv("ENV_FILE", path)
 
-	cfg, err := config.Load()
+	cfg, err := config.Load(context.Background())
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
@@ -71,7 +72,7 @@ func TestLoad_prodRequiresLLMURLs(t *testing.T) {
 	t.Setenv("APP_ENV", "prod")
 	t.Setenv("ENV_FILE", path)
 
-	if _, err := config.Load(); err == nil {
+	if _, err := config.Load(context.Background()); err == nil {
 		t.Fatal("expected error when prod URLs/key/models are empty")
 	}
 }

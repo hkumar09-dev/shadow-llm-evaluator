@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"log/slog"
+	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/compare"
@@ -15,22 +21,33 @@ import (
 )
 
 func main() {
-	cfg, err := config.Load()
+	// Root application context — canceled on SIGINT/SIGTERM and passed everywhere.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := run(ctx); err != nil {
+		log.Fatalf("server failed: %v", err)
+	}
+}
+
+func run(ctx context.Context) error {
+	cfg, err := config.Load(ctx)
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		return err
 	}
 
-	logger := newLogger(cfg.LogLevel)
+	logger := newLogger(ctx, cfg.LogLevel)
 	slog.SetDefault(logger)
 	gin.SetMode(cfg.GinMode)
 
-	primarySim := simulator.NewPrimary()
-	candidateSim := simulator.NewCandidate()
+	primarySim := simulator.NewPrimary(ctx)
+	candidateSim := simulator.NewCandidate(ctx)
 
 	var primary llm.Completer = primarySim
 	primaryDesc := "in-process primary simulator"
 	if !cfg.UsePrimarySimulator() {
 		primary = llm.NewPrimaryClientWithTimeout(
+			ctx,
 			cfg.PrimaryLLMURL,
 			cfg.HTTPClientTimeout,
 			llm.WithAPIKey(cfg.ModelAccessKey),
@@ -43,6 +60,7 @@ func main() {
 	candidateDesc := "in-process candidate simulator"
 	if !cfg.UseCandidateSimulator() {
 		candidate = llm.NewCandidateClientWithTimeout(
+			ctx,
 			cfg.CandidateLLMURL,
 			cfg.HTTPClientTimeout,
 			llm.WithAPIKey(cfg.ModelAccessKey),
@@ -52,29 +70,28 @@ func main() {
 	}
 
 	shadowRunner := shadow.NewRunner(
+		ctx,
 		candidate,
-		compare.NewContentComparator(),
+		compare.NewContentComparator(ctx),
 		logger,
 		shadow.WithTimeout(cfg.ShadowTimeout),
 		shadow.WithMaxInflight(cfg.ShadowMaxInflight),
 	)
 
-	primaryHandler := handler.NewPrimaryHandler(primary, shadowRunner, logger)
-	healthHandler := handler.NewHealthHandler(cfg.AppEnv)
+	primaryHandler := handler.NewPrimaryHandler(ctx, primary, shadowRunner, logger)
+	healthHandler := handler.NewHealthHandler(ctx, cfg.AppEnv)
 
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 	_ = r.SetTrustedProxies(nil)
 
-	r.POST("/simulate/primary", simulator.PrimaryHandler(primarySim))
+	r.POST("/simulate/primary", simulator.PrimaryHandler(ctx, primarySim))
 	r.POST("/v1/primary", primaryHandler.Handle)
-
-	// Health checks (DigitalOcean App Platform uses /healthz).
 	r.GET("/healthz", healthHandler.Live)
 	r.GET("/health", healthHandler.Live)
 	r.GET("/ready", healthHandler.Ready)
 
-	logger.Info("server starting",
+	logger.InfoContext(ctx, "server starting",
 		"app_env", cfg.AppEnv,
 		"addr", cfg.Addr,
 		"gin_mode", cfg.GinMode,
@@ -85,12 +102,43 @@ func main() {
 		"shadow_max_inflight", cfg.ShadowMaxInflight,
 		"model_access_key_set", cfg.ModelAccessKey != "" && cfg.ModelAccessKey != "YOUR_MODEL_ACCESS_KEY",
 	)
-	if err := r.Run(cfg.Addr); err != nil {
-		log.Fatalf("server failed: %v", err)
+
+	srv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
 	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+			return
+		}
+		errCh <- nil
+	}()
+
+	select {
+	case <-ctx.Done():
+		logger.Info("shutdown signal received")
+	case err := <-errCh:
+		if err != nil {
+			return err
+		}
+	}
+
+	// Use a fresh timeout independent of the already-canceled signal context.
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+	shadowRunner.Wait()
+	return nil
 }
 
-func newLogger(level config.LogLevel) *slog.Logger {
+func newLogger(ctx context.Context, level config.LogLevel) *slog.Logger {
+	_ = ctx // reserved for context-aware handlers / request IDs later
 	var lvl slog.Level
 	switch level {
 	case config.LogDebug:

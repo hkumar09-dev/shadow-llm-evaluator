@@ -1,10 +1,3 @@
-// Package simulator provides in-process fake LLMs for local development.
-//
-// You do not need OpenAI/vLLM running to exercise the shadow path:
-//   - Primary  → answers with "primary echo: ..."
-//   - Candidate → answers with "candidate echo: ..."
-//
-// Because those strings differ, POST /v1/primary will produce mismatch logs.
 package simulator
 
 import (
@@ -14,21 +7,32 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/ctxutil"
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// Primary is an in-process simulated primary LLM (implements llm.Completer).
-// No HTTP loopback is required for /v1/primary to work.
-type Primary struct{}
+// Primary is an in-process simulated primary LLM.
+type Primary struct {
+	appCtx context.Context
+}
 
 // NewPrimary returns a simulated primary LLM completer.
-func NewPrimary() *Primary {
-	return &Primary{}
+func NewPrimary(appCtx context.Context) *Primary {
+	if appCtx == nil {
+		appCtx = context.Background()
+	}
+	return &Primary{appCtx: appCtx}
 }
 
 // Complete returns a simulated chat completion immediately.
-// Content is intentionally prefixed with "primary echo:" so it differs from Candidate.
-func (p *Primary) Complete(_ context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
+func (p *Primary) Complete(ctx context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := p.appCtx.Err(); err != nil {
+		return nil, err
+	}
+
 	content := "Hello from simulated primary LLM."
 	if n := len(req.Messages); n > 0 {
 		if last := req.Messages[n-1].Content; last != "" {
@@ -58,16 +62,23 @@ func (p *Primary) Complete(_ context.Context, req models.ChatRequest) (*models.C
 }
 
 // PrimaryHandler exposes the simulator as POST /simulate/primary.
-// Handy for manually probing the fake primary without going through shadow logic.
-func PrimaryHandler(primary *Primary) gin.HandlerFunc {
+func PrimaryHandler(appCtx context.Context, primary *Primary) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if err := appCtx.Err(); err != nil {
+			c.JSON(http.StatusServiceUnavailable, models.ErrorResponse{Error: "service shutting down"})
+			return
+		}
+
+		ctx, cancel := ctxutil.Link(c.Request.Context(), appCtx)
+		defer cancel()
+
 		var req models.ChatRequest
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, models.ErrorResponse{Error: err.Error()})
 			return
 		}
 
-		resp, err := primary.Complete(c.Request.Context(), req)
+		resp, err := primary.Complete(ctx, req)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, models.ErrorResponse{Error: err.Error()})
 			return

@@ -12,28 +12,27 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// HTTPClient POSTs OpenAI-compatible chat completions to a remote LLM endpoint
-// (e.g. DigitalOcean Inference: https://inference.do-ai.run/v1/chat/completions).
+// HTTPClient POSTs OpenAI-compatible chat completions to a remote LLM endpoint.
 type HTTPClient struct {
-	name         string // "primary" or "candidate"
+	appCtx       context.Context
+	name         string
 	baseURL      string
-	apiKey       string // MODEL_ACCESS_KEY — sent as Authorization: Bearer ...
-	defaultModel string // used when the inbound request has no model set
+	apiKey       string
+	defaultModel string
 	httpClient   *http.Client
 }
 
 // ClientOption configures an HTTPClient.
 type ClientOption func(*HTTPClient)
 
-// WithAPIKey sets the Bearer token (DigitalOcean Model Access Key).
+// WithAPIKey sets the Bearer token.
 func WithAPIKey(key string) ClientOption {
 	return func(c *HTTPClient) {
 		c.apiKey = key
 	}
 }
 
-// WithDefaultModel sets the model id when the request omits one
-// (e.g. "router:shadow-mode-llm-evaluator").
+// WithDefaultModel sets the model id when the request omits one.
 func WithDefaultModel(model string) ClientOption {
 	return func(c *HTTPClient) {
 		c.defaultModel = model
@@ -50,8 +49,12 @@ func WithTimeout(d time.Duration) ClientOption {
 }
 
 // NewHTTPClient creates a named HTTP completer targeting baseURL.
-func NewHTTPClient(name, baseURL string, opts ...ClientOption) *HTTPClient {
+func NewHTTPClient(appCtx context.Context, name, baseURL string, opts ...ClientOption) *HTTPClient {
+	if appCtx == nil {
+		appCtx = context.Background()
+	}
 	c := &HTTPClient{
+		appCtx:  appCtx,
 		name:    name,
 		baseURL: baseURL,
 		httpClient: &http.Client{
@@ -64,20 +67,18 @@ func NewHTTPClient(name, baseURL string, opts ...ClientOption) *HTTPClient {
 	return c
 }
 
-// NewPrimaryClientWithTimeout creates a primary HTTP client (compat helper).
-func NewPrimaryClientWithTimeout(baseURL string, timeout time.Duration, opts ...ClientOption) *HTTPClient {
+// NewPrimaryClientWithTimeout creates a primary HTTP client.
+func NewPrimaryClientWithTimeout(appCtx context.Context, baseURL string, timeout time.Duration, opts ...ClientOption) *HTTPClient {
 	opts = append([]ClientOption{WithTimeout(timeout)}, opts...)
-	return NewHTTPClient("primary", baseURL, opts...)
+	return NewHTTPClient(appCtx, "primary", baseURL, opts...)
 }
 
-// NewCandidateClientWithTimeout creates a candidate HTTP client (compat helper).
-func NewCandidateClientWithTimeout(baseURL string, timeout time.Duration, opts ...ClientOption) *HTTPClient {
+// NewCandidateClientWithTimeout creates a candidate HTTP client.
+func NewCandidateClientWithTimeout(appCtx context.Context, baseURL string, timeout time.Duration, opts ...ClientOption) *HTTPClient {
 	opts = append([]ClientOption{WithTimeout(timeout)}, opts...)
-	return NewHTTPClient("candidate", baseURL, opts...)
+	return NewHTTPClient(appCtx, "candidate", baseURL, opts...)
 }
 
-// outboundRequest is the JSON body DigitalOcean / OpenAI expect.
-// stream is always false — we need a full JSON response to compare models.
 type outboundRequest struct {
 	Model    string           `json:"model"`
 	Messages []models.Message `json:"messages"`
@@ -86,6 +87,13 @@ type outboundRequest struct {
 
 // Complete posts the request to the configured LLM and waits for the response.
 func (c *HTTPClient) Complete(ctx context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := c.appCtx.Err(); err != nil {
+		return nil, fmt.Errorf("%s llm: app shutting down: %w", c.name, err)
+	}
+
 	model := req.Model
 	if model == "" {
 		model = c.defaultModel
@@ -97,7 +105,7 @@ func (c *HTTPClient) Complete(ctx context.Context, req models.ChatRequest) (*mod
 	payload := outboundRequest{
 		Model:    model,
 		Messages: req.Messages,
-		Stream:   false, // never stream — shadow compare needs complete JSON
+		Stream:   false,
 	}
 
 	body, err := json.Marshal(payload)

@@ -22,6 +22,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,7 +77,11 @@ const (
 )
 
 // Load reads APP_ENV (default: local), loads env/.env.<env>, then builds Config.
-func Load() (*Config, error) {
+func Load(ctx context.Context) (*Config, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	appEnv := strings.ToLower(strings.TrimSpace(envOr("APP_ENV", EnvLocal)))
 	if err := validateAppEnv(appEnv); err != nil {
 		return nil, err
