@@ -1,0 +1,13 @@
+# Binaries
+shadow-llm-evaluator
+*.exe
+*.test
+
+# Local overrides (committed env templates live under env/)
+.env
+.env.local.override
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store

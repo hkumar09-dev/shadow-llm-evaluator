@@ -1,0 +1,64 @@
+# DigitalOcean App Platform specification
+# Docs: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
+#
+# Deploy:
+#   doctl auth init
+#   doctl apps create --spec .do/app.yaml
+#
+# Or connect the GitHub repo in the DigitalOcean UI and paste this spec.
+name: shadow-llm-evaluator
+region: nyc
+
+services:
+  - name: api
+    github:
+      repo: hkumar09-dev/shadow-llm-evaluator
+      branch: main
+      deploy_on_push: true
+    dockerfile_path: Dockerfile
+    source_dir: /
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: basic-xxs
+    health_check:
+      http_path: /healthz
+      initial_delay_seconds: 10
+      period_seconds: 10
+      timeout_seconds: 5
+      success_threshold: 1
+      failure_threshold: 6
+    envs:
+      # First deploy uses in-process LLM simulators (env/.env.local).
+      # For real LLMs: set APP_ENV=prod and override PRIMARY_LLM_URL / CANDIDATE_LLM_URL.
+      - key: APP_ENV
+        scope: RUN_TIME
+        value: "local"
+      - key: ENV_DIR
+        scope: RUN_TIME
+        value: "env"
+      - key: ADDR
+        scope: RUN_TIME
+        value: ":8080"
+      - key: GIN_MODE
+        scope: RUN_TIME
+        value: "release"
+      - key: LOG_LEVEL
+        scope: RUN_TIME
+        value: "info"
+      - key: PRIMARY_LLM_URL
+        scope: RUN_TIME
+        value: ""
+        type: GENERAL
+      - key: CANDIDATE_LLM_URL
+        scope: RUN_TIME
+        value: ""
+        type: GENERAL
+      - key: SHADOW_TIMEOUT_SECONDS
+        scope: RUN_TIME
+        value: "30"
+      - key: SHADOW_MAX_INFLIGHT
+        scope: RUN_TIME
+        value: "64"
+      - key: HTTP_CLIENT_TIMEOUT_SECONDS
+        scope: RUN_TIME
+        value: "30"

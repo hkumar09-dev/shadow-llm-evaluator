@@ -1,3 +1,9 @@
+// Package simulator provides in-process fake LLMs for local development.
+//
+// You do not need OpenAI/vLLM running to exercise the shadow path:
+//   - Primary  → answers with "primary echo: ..."
+//   - Candidate → answers with "candidate echo: ..."
+// Because those strings differ, POST /v1/primary will produce mismatch logs.
 package simulator
 
 import (
@@ -10,7 +16,8 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// Primary is an in-process simulated primary LLM (no HTTP loopback required).
+// Primary is an in-process simulated primary LLM (implements llm.Completer).
+// No HTTP loopback is required for /v1/primary to work.
 type Primary struct{}
 
 // NewPrimary returns a simulated primary LLM completer.
@@ -19,6 +26,7 @@ func NewPrimary() *Primary {
 }
 
 // Complete returns a simulated chat completion immediately.
+// Content is intentionally prefixed with "primary echo:" so it differs from Candidate.
 func (p *Primary) Complete(_ context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
 	content := "Hello from simulated primary LLM."
 	if n := len(req.Messages); n > 0 {
@@ -48,7 +56,8 @@ func (p *Primary) Complete(_ context.Context, req models.ChatRequest) (*models.C
 	}, nil
 }
 
-// PrimaryHandler exposes the simulator as an HTTP POST endpoint.
+// PrimaryHandler exposes the simulator as POST /simulate/primary.
+// Handy for manually probing the fake primary without going through shadow logic.
 func PrimaryHandler(primary *Primary) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		var req models.ChatRequest

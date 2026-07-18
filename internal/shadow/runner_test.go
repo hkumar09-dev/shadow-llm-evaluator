@@ -13,6 +13,8 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/shadow"
 )
 
+// stubCompleter is a fake llm.Completer used only in tests.
+// It waits for `delay`, then either returns resp or reports that ctx was canceled.
 type stubCompleter struct {
 	sawCanceled atomic.Bool
 	delay       time.Duration
@@ -28,11 +30,14 @@ func (s *stubCompleter) Complete(ctx context.Context, _ models.ChatRequest) (*mo
 		}
 		return s.resp, nil
 	case <-ctx.Done():
+		// Context canceled/timed out before delay finished.
 		s.sawCanceled.Store(true)
 		return nil, ctx.Err()
 	}
 }
 
+// TestEvaluateAsync_survivesRequestCancel proves the core shadow guarantee:
+// canceling the HTTP request context must NOT cancel the candidate call.
 func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
 	candidate := &stubCompleter{
 		delay: 150 * time.Millisecond,
@@ -63,7 +68,7 @@ func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
 		Messages: []models.Message{{Role: "user", Content: "hi"}},
 	}, primary)
 
-	// Simulate client disconnect immediately after primary response.
+	// Simulate client disconnect right after the primary response was sent.
 	cancel()
 	runner.Wait()
 
@@ -72,9 +77,11 @@ func TestEvaluateAsync_survivesRequestCancel(t *testing.T) {
 	}
 }
 
+// TestEvaluateAsync_respectsDetachedTimeout proves shadow work is still bounded:
+// WithoutCancel removes client cancel, but WithTimeout still stops hung candidates.
 func TestEvaluateAsync_respectsDetachedTimeout(t *testing.T) {
 	candidate := &stubCompleter{
-		delay: 500 * time.Millisecond,
+		delay: 500 * time.Millisecond, // longer than shadow timeout below
 		resp:  &models.ChatResponse{Model: "candidate"},
 	}
 

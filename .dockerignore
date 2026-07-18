@@ -1,0 +1,9 @@
+.git
+.gitignore
+.dockerignore
+Dockerfile
+.do
+shadow-llm-evaluator
+**/*_test.go
+*.md
+.DS_Store

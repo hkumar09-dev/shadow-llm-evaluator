@@ -12,20 +12,29 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// HTTPClient POSTs chat requests to a remote LLM endpoint.
+// HTTPClient POSTs chat requests to a remote LLM HTTP endpoint.
+// Used when PRIMARY_LLM_URL / CANDIDATE_LLM_URL are set.
 type HTTPClient struct {
-	name       string
-	baseURL    string
-	httpClient *http.Client
+	name       string       // "primary" or "candidate" — used in error messages
+	baseURL    string       // full URL to POST to
+	httpClient *http.Client // shared HTTP client with timeout
 }
 
 // NewHTTPClient creates a named HTTP completer targeting baseURL.
 func NewHTTPClient(name, baseURL string) *HTTPClient {
+	return NewHTTPClientWithTimeout(name, baseURL, 30*time.Second)
+}
+
+// NewHTTPClientWithTimeout creates a named HTTP completer with a custom timeout.
+func NewHTTPClientWithTimeout(name, baseURL string, timeout time.Duration) *HTTPClient {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
 	return &HTTPClient{
 		name:    name,
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: timeout,
 		},
 	}
 }
@@ -35,12 +44,23 @@ func NewPrimaryClient(baseURL string) *HTTPClient {
 	return NewHTTPClient("primary", baseURL)
 }
 
+// NewPrimaryClientWithTimeout creates a primary HTTP client with a custom timeout.
+func NewPrimaryClientWithTimeout(baseURL string, timeout time.Duration) *HTTPClient {
+	return NewHTTPClientWithTimeout("primary", baseURL, timeout)
+}
+
 // NewCandidateClient is a convenience constructor for the candidate HTTP LLM.
 func NewCandidateClient(baseURL string) *HTTPClient {
 	return NewHTTPClient("candidate", baseURL)
 }
 
+// NewCandidateClientWithTimeout creates a candidate HTTP client with a custom timeout.
+func NewCandidateClientWithTimeout(baseURL string, timeout time.Duration) *HTTPClient {
+	return NewHTTPClientWithTimeout("candidate", baseURL, timeout)
+}
+
 // Complete posts the request to the configured LLM and waits for the response.
+// Respects ctx cancellation/timeout (shadow runner passes a detached+timeout ctx).
 func (c *HTTPClient) Complete(ctx context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {

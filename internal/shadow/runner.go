@@ -1,3 +1,12 @@
+// Package shadow orchestrates asynchronous "shadow" evaluations.
+//
+// A shadow evaluation means: after (or alongside) serving the primary model
+// response, we also send the same prompt to a candidate model in the background
+// and compare the two outputs. The user never waits on the candidate.
+//
+// SOLID:
+//   - Single Responsibility: only scheduling + comparing + logging mismatches
+//   - Dependency Inversion: depends on llm.Completer and compare.Comparator
 package shadow
 
 import (
@@ -12,29 +21,35 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// Evaluator runs asynchronous shadow evaluations against a candidate LLM.
+// Evaluator is the abstraction the HTTP handler depends on.
+// Keeping this small (ISP) lets tests stub shadowing easily.
 type Evaluator interface {
+	// EvaluateAsync must not block the caller for the duration of the candidate call.
 	EvaluateAsync(reqCtx context.Context, req models.ChatRequest, primary *models.ChatResponse)
 }
 
-// Runner fires-and-forgets candidate completions, then compares them to the
-// primary response. The request context is detached so client disconnects
-// do not cancel the background work.
+// Runner is the default Evaluator implementation.
+//
+// Key design choice — detached context:
+// Gin cancels c.Request.Context() when the client disconnects. If we passed that
+// context into the candidate call, shadow work would stop early. Instead we use
+// context.WithoutCancel + an explicit timeout so shadow work outlives the HTTP
+// connection but still cannot run forever.
 type Runner struct {
-	candidate  llm.Completer
-	comparator compare.Comparator
-	logger     *slog.Logger
-	timeout    time.Duration
-	maxInflight int64
+	candidate   llm.Completer      // candidate / challenger model
+	comparator  compare.Comparator // decides equal vs mismatch
+	logger      *slog.Logger
+	timeout     time.Duration // max time for one shadow evaluation
+	maxInflight int64         // concurrency cap for background jobs
 
-	inflight atomic.Int64
+	inflight atomic.Int64 // how many shadow goroutines are currently running
 	wg       sync.WaitGroup
 }
 
-// Option configures a Runner.
+// Option is a functional option for configuring Runner (Open/Closed friendly).
 type Option func(*Runner)
 
-// WithTimeout sets the detached context timeout for candidate calls.
+// WithTimeout sets how long a detached shadow call may run.
 func WithTimeout(d time.Duration) Option {
 	return func(r *Runner) {
 		if d > 0 {
@@ -43,7 +58,8 @@ func WithTimeout(d time.Duration) Option {
 	}
 }
 
-// WithMaxInflight caps concurrent background shadow evaluations.
+// WithMaxInflight limits concurrent shadow goroutines.
+// When the limit is hit, new shadow evaluations are skipped (never block primary).
 func WithMaxInflight(n int) Option {
 	return func(r *Runner) {
 		if n > 0 {
@@ -52,7 +68,7 @@ func WithMaxInflight(n int) Option {
 	}
 }
 
-// NewRunner constructs a shadow evaluator (Dependency Inversion on Completer + Comparator).
+// NewRunner constructs a shadow evaluator.
 func NewRunner(candidate llm.Completer, comparator compare.Comparator, logger *slog.Logger, opts ...Option) *Runner {
 	if logger == nil {
 		logger = slog.Default()
@@ -75,12 +91,13 @@ func NewRunner(candidate llm.Completer, comparator compare.Comparator, logger *s
 }
 
 // EvaluateAsync schedules a background candidate call that outlives the
-// primary HTTP request. Safe to call after the response has been written.
+// primary HTTP request. It is safe to call after the response has been written.
 func (r *Runner) EvaluateAsync(reqCtx context.Context, req models.ChatRequest, primary *models.ChatResponse) {
 	if r == nil || r.candidate == nil || primary == nil {
 		return
 	}
 
+	// Cheap backpressure: never queue unbounded shadow work.
 	if r.inflight.Add(1) > r.maxInflight {
 		r.inflight.Add(-1)
 		r.logger.Warn("shadow evaluation skipped: max inflight reached",
@@ -89,11 +106,13 @@ func (r *Runner) EvaluateAsync(reqCtx context.Context, req models.ChatRequest, p
 		return
 	}
 
-	// Detach from the HTTP request so client close / cancel does not abort shadow work.
+	// --- Context survival (the important bit) ---
+	// WithoutCancel keeps values from reqCtx but drops cancellation from the client.
+	// WithTimeout still bounds the work so a stuck candidate cannot leak forever.
 	base := context.WithoutCancel(reqCtx)
 	ctx, cancel := context.WithTimeout(base, r.timeout)
 
-	// Copy request so the handler can mutate/reuse its stack value safely.
+	// Copy inputs before spawning the goroutine (avoid data races / reuse bugs).
 	reqCopy := cloneRequest(req)
 	primaryCopy := cloneResponse(primary)
 
@@ -102,6 +121,7 @@ func (r *Runner) EvaluateAsync(reqCtx context.Context, req models.ChatRequest, p
 		defer r.wg.Done()
 		defer r.inflight.Add(-1)
 		defer cancel()
+		// Shadow must never crash the whole process.
 		defer func() {
 			if rec := recover(); rec != nil {
 				r.logger.Error("shadow evaluation panicked", "recover", rec)
@@ -112,7 +132,8 @@ func (r *Runner) EvaluateAsync(reqCtx context.Context, req models.ChatRequest, p
 	}()
 }
 
-// Wait blocks until in-flight shadow evaluations finish (for graceful shutdown/tests).
+// Wait blocks until in-flight shadow evaluations finish.
+// Useful for tests and graceful shutdown.
 func (r *Runner) Wait() {
 	if r == nil {
 		return
@@ -120,6 +141,7 @@ func (r *Runner) Wait() {
 	r.wg.Wait()
 }
 
+// evaluate performs the candidate call and comparison on a background goroutine.
 func (r *Runner) evaluate(ctx context.Context, req models.ChatRequest, primary *models.ChatResponse) {
 	candidate, err := r.candidate.Complete(ctx, req)
 	if err != nil {
@@ -139,6 +161,7 @@ func (r *Runner) evaluate(ctx context.Context, req models.ChatRequest, primary *
 		return
 	}
 
+	// Mismatch: log clean JSON payloads for both sides so diffs are easy to inspect.
 	r.logger.Warn("shadow evaluation mismatched",
 		"primary_model", primary.Model,
 		"candidate_model", candidate.Model,
@@ -156,6 +179,7 @@ func jsonString(raw []byte) string {
 	return string(raw)
 }
 
+// cloneRequest shallow-copies the request and deep-copies the messages slice.
 func cloneRequest(req models.ChatRequest) models.ChatRequest {
 	out := req
 	if req.Messages != nil {
@@ -164,6 +188,7 @@ func cloneRequest(req models.ChatRequest) models.ChatRequest {
 	return out
 }
 
+// cloneResponse copies the response so the background goroutine owns its data.
 func cloneResponse(resp *models.ChatResponse) *models.ChatResponse {
 	if resp == nil {
 		return nil

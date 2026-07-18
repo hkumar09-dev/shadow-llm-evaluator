@@ -8,8 +8,11 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// Candidate is an in-process simulated candidate LLM. Its responses differ
-// from Primary so shadow comparison can detect mismatches in local demos.
+// Candidate is an in-process simulated candidate (challenger) LLM.
+//
+// It implements llm.Completer just like Primary, but returns different text
+// ("candidate echo: ...") so the shadow comparator can demonstrate mismatches
+// during local demos without needing two real model deployments.
 type Candidate struct{}
 
 // NewCandidate returns a simulated candidate LLM completer.
@@ -18,6 +21,7 @@ func NewCandidate() *Candidate {
 }
 
 // Complete returns a simulated candidate chat completion.
+// Deliberately different from Primary.Complete so shadow logs show a mismatch.
 func (c *Candidate) Complete(_ context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
 	content := "Hello from simulated candidate LLM."
 	if n := len(req.Messages); n > 0 {
@@ -30,6 +34,7 @@ func (c *Candidate) Complete(_ context.Context, req models.ChatRequest) (*models
 	if model == "" {
 		model = "candidate-sim-v1"
 	} else {
+		// Keep the requested name but mark it as the candidate variant.
 		model = model + "-candidate"
 	}
 
