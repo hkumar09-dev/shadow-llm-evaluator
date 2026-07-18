@@ -46,10 +46,10 @@ services:
         value: "https://inference.do-ai.run/v1/chat/completions"
       - key: PRIMARY_MODEL
         scope: RUN_TIME
-        value: "router:shadow-mode-llm-evaluator"
+        value: "deepseek-4-flash"
       - key: CANDIDATE_MODEL
         scope: RUN_TIME
-        value: "router:shadow-mode-llm-evaluator"
+        value: "glm-5.1"
       # Injected from GitHub Actions secret MODEL_ACCESS_KEY at deploy time
       - key: MODEL_ACCESS_KEY
         scope: RUN_TIME
@@ -63,4 +63,4 @@ services:
         value: "64"
       - key: HTTP_CLIENT_TIMEOUT_SECONDS
         scope: RUN_TIME
-        value: "60"
+        value: "20"
