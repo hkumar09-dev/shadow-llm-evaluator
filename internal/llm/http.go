@@ -12,57 +12,95 @@ import (
 	"github.com/hkumar09-dev/shadow-llm-evaluator/internal/models"
 )
 
-// HTTPClient POSTs chat requests to a remote LLM HTTP endpoint.
-// Used when PRIMARY_LLM_URL / CANDIDATE_LLM_URL are set.
+// HTTPClient POSTs OpenAI-compatible chat completions to a remote LLM endpoint
+// (e.g. DigitalOcean Inference: https://inference.do-ai.run/v1/chat/completions).
 type HTTPClient struct {
-	name       string       // "primary" or "candidate" — used in error messages
-	baseURL    string       // full URL to POST to
-	httpClient *http.Client // shared HTTP client with timeout
+	name         string // "primary" or "candidate"
+	baseURL      string
+	apiKey       string // MODEL_ACCESS_KEY — sent as Authorization: Bearer ...
+	defaultModel string // used when the inbound request has no model set
+	httpClient   *http.Client
+}
+
+// ClientOption configures an HTTPClient.
+type ClientOption func(*HTTPClient)
+
+// WithAPIKey sets the Bearer token (DigitalOcean Model Access Key).
+func WithAPIKey(key string) ClientOption {
+	return func(c *HTTPClient) {
+		c.apiKey = key
+	}
+}
+
+// WithDefaultModel sets the model id when the request omits one
+// (e.g. "router:shadow-mode-llm-evaluator").
+func WithDefaultModel(model string) ClientOption {
+	return func(c *HTTPClient) {
+		c.defaultModel = model
+	}
+}
+
+// WithTimeout overrides the HTTP client timeout.
+func WithTimeout(d time.Duration) ClientOption {
+	return func(c *HTTPClient) {
+		if d > 0 {
+			c.httpClient.Timeout = d
+		}
+	}
 }
 
 // NewHTTPClient creates a named HTTP completer targeting baseURL.
-func NewHTTPClient(name, baseURL string) *HTTPClient {
-	return NewHTTPClientWithTimeout(name, baseURL, 30*time.Second)
-}
-
-// NewHTTPClientWithTimeout creates a named HTTP completer with a custom timeout.
-func NewHTTPClientWithTimeout(name, baseURL string, timeout time.Duration) *HTTPClient {
-	if timeout <= 0 {
-		timeout = 30 * time.Second
-	}
-	return &HTTPClient{
+func NewHTTPClient(name, baseURL string, opts ...ClientOption) *HTTPClient {
+	c := &HTTPClient{
 		name:    name,
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: timeout,
+			Timeout: 30 * time.Second,
 		},
 	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c
 }
 
-// NewPrimaryClient is a convenience constructor for the primary HTTP LLM.
-func NewPrimaryClient(baseURL string) *HTTPClient {
-	return NewHTTPClient("primary", baseURL)
+// NewPrimaryClientWithTimeout creates a primary HTTP client (compat helper).
+func NewPrimaryClientWithTimeout(baseURL string, timeout time.Duration, opts ...ClientOption) *HTTPClient {
+	opts = append([]ClientOption{WithTimeout(timeout)}, opts...)
+	return NewHTTPClient("primary", baseURL, opts...)
 }
 
-// NewPrimaryClientWithTimeout creates a primary HTTP client with a custom timeout.
-func NewPrimaryClientWithTimeout(baseURL string, timeout time.Duration) *HTTPClient {
-	return NewHTTPClientWithTimeout("primary", baseURL, timeout)
+// NewCandidateClientWithTimeout creates a candidate HTTP client (compat helper).
+func NewCandidateClientWithTimeout(baseURL string, timeout time.Duration, opts ...ClientOption) *HTTPClient {
+	opts = append([]ClientOption{WithTimeout(timeout)}, opts...)
+	return NewHTTPClient("candidate", baseURL, opts...)
 }
 
-// NewCandidateClient is a convenience constructor for the candidate HTTP LLM.
-func NewCandidateClient(baseURL string) *HTTPClient {
-	return NewHTTPClient("candidate", baseURL)
-}
-
-// NewCandidateClientWithTimeout creates a candidate HTTP client with a custom timeout.
-func NewCandidateClientWithTimeout(baseURL string, timeout time.Duration) *HTTPClient {
-	return NewHTTPClientWithTimeout("candidate", baseURL, timeout)
+// outboundRequest is the JSON body DigitalOcean / OpenAI expect.
+// stream is always false — we need a full JSON response to compare models.
+type outboundRequest struct {
+	Model    string           `json:"model"`
+	Messages []models.Message `json:"messages"`
+	Stream   bool             `json:"stream"`
 }
 
 // Complete posts the request to the configured LLM and waits for the response.
-// Respects ctx cancellation/timeout (shadow runner passes a detached+timeout ctx).
 func (c *HTTPClient) Complete(ctx context.Context, req models.ChatRequest) (*models.ChatResponse, error) {
-	body, err := json.Marshal(req)
+	model := req.Model
+	if model == "" {
+		model = c.defaultModel
+	}
+	if model == "" {
+		return nil, fmt.Errorf("%s llm: model is required (set request.model or PRIMARY_MODEL/CANDIDATE_MODEL)", c.name)
+	}
+
+	payload := outboundRequest{
+		Model:    model,
+		Messages: req.Messages,
+		Stream:   false, // never stream — shadow compare needs complete JSON
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal %s request: %w", c.name, err)
 	}
@@ -72,6 +110,9 @@ func (c *HTTPClient) Complete(ctx context.Context, req models.ChatRequest) (*mod
 		return nil, fmt.Errorf("create %s request: %w", c.name, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

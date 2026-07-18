@@ -3,6 +3,7 @@
 // You do not need OpenAI/vLLM running to exercise the shadow path:
 //   - Primary  → answers with "primary echo: ..."
 //   - Candidate → answers with "candidate echo: ..."
+//
 // Because those strings differ, POST /v1/primary will produce mismatch logs.
 package simulator
 

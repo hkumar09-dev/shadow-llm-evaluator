@@ -13,35 +13,41 @@ curl -X POST http://127.0.0.1:8080/v1/primary \
 
 Env files live in `env/` (`.env.local`, `.env.dev`, `.env.qa`, `.env.prod`).
 
+## CI/CD (GitHub Actions)
+
+Workflow: [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml)
+
+| Job | When | What |
+|-----|------|------|
+| **quality** | PR + push | `gofmt`, `go vet`, `golangci-lint`, validate `.do/app.yaml` |
+| **test** | PR + push | `go test -race`, coverage, `go build` |
+| **deploy** | push to `main` only | DigitalOcean App Platform via `digitalocean/app_action/deploy@v2` |
+
+### Required GitHub secrets
+
+Repo → **Settings → Secrets and variables → Actions**:
+
+| Secret | Where to get it |
+|--------|-----------------|
+| `DIGITALOCEAN_ACCESS_TOKEN` | [API tokens](https://cloud.digitalocean.com/account/api/tokens) (Apps read/write) |
+| `MODEL_ACCESS_KEY` | Inference → Manage → Model Access Keys |
+
+Also create a GitHub **Environment** named `production` (Settings → Environments) used by the deploy job.
+
+See [`.github/SECRETS.md`](.github/SECRETS.md).
+
 ## Deploy to DigitalOcean App Platform
 
-### 1. Prerequisites
-- DigitalOcean account
-- GitHub repo connected to DigitalOcean (App Platform → GitHub)
-- [`doctl`](https://docs.digitalocean.com/reference/doctl/how-to/install/) installed
+Deploys happen automatically on merge/push to `main` after CI passes.
 
-### 2. Authenticate
+Manual first-time create (optional):
 
 ```bash
 doctl auth init
-# paste your DigitalOcean API token (read/write)
-```
-
-### 3. Create the app from the repo spec
-
-```bash
-# from repo root (after pushing this code to GitHub main)
 doctl apps create --spec .do/app.yaml
 ```
 
-List apps and get the live URL:
-
-```bash
-doctl apps list
-doctl apps get <APP_ID> --format DefaultIngress,ID,Spec.Name
-```
-
-### 4. Verify
+Verify:
 
 ```bash
 curl https://<your-app>.ondigitalocean.app/healthz
@@ -49,21 +55,3 @@ curl -X POST https://<your-app>.ondigitalocean.app/v1/primary \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"hello from digitalocean"}]}'
 ```
-
-### 5. Point at real LLMs (optional)
-
-In the DigitalOcean dashboard → App → Settings → App-Level Environment Variables (or edit `.do/app.yaml` and `doctl apps update`):
-
-- `APP_ENV=prod`
-- `PRIMARY_LLM_URL=https://...`
-- `CANDIDATE_LLM_URL=https://...`
-
-Then redeploy.
-
-### UI alternative
-
-1. DigitalOcean → **Apps** → **Create App**
-2. Choose GitHub repo `hkumar09-dev/shadow-llm-evaluator` (branch `main`)
-3. Detect Dockerfile / or upload `.do/app.yaml`
-4. Set HTTP port `8080`, health check `/healthz`
-5. Deploy

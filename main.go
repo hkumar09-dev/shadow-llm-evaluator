@@ -1,22 +1,3 @@
-// Package main is the entrypoint for the shadow-llm-evaluator HTTP server.
-//
-// High-level request flow:
-//
-//  1. Client POSTs to /v1/primary
-//  2. Handler calls the PRIMARY LLM synchronously and returns that response immediately
-//  3. In the background, a CANDIDATE LLM is called with the same prompt
-//  4. Primary vs candidate outputs are compared; mismatches are logged as clean JSON
-//
-// Why "shadow"? The candidate path must never slow down or break the user-facing
-// primary path. It runs asynchronously and uses a detached context so it keeps
-// running even if the client closes the HTTP connection.
-//
-// Configuration is loaded from env files under env/:
-//
-//	APP_ENV=local go run .   # env/.env.local
-//	APP_ENV=dev   go run .   # env/.env.dev
-//	APP_ENV=qa    go run .   # env/.env.qa
-//	APP_ENV=prod  go run .   # env/.env.prod
 package main
 
 import (
@@ -34,7 +15,6 @@ import (
 )
 
 func main() {
-	// Load all settings from env/.env.<APP_ENV> (default: env/.env.local).
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
@@ -42,27 +22,33 @@ func main() {
 
 	logger := newLogger(cfg.LogLevel)
 	slog.SetDefault(logger)
-
-	// Apply gin mode from env (debug locally, release in qa/prod).
 	gin.SetMode(cfg.GinMode)
 
 	primarySim := simulator.NewPrimary()
 	candidateSim := simulator.NewCandidate()
 
-	// Wire primary Completer from config (simulator vs HTTP URL).
 	var primary llm.Completer = primarySim
 	primaryDesc := "in-process primary simulator"
 	if !cfg.UsePrimarySimulator() {
-		primary = llm.NewPrimaryClientWithTimeout(cfg.PrimaryLLMURL, cfg.HTTPClientTimeout)
-		primaryDesc = cfg.PrimaryLLMURL
+		primary = llm.NewPrimaryClientWithTimeout(
+			cfg.PrimaryLLMURL,
+			cfg.HTTPClientTimeout,
+			llm.WithAPIKey(cfg.ModelAccessKey),
+			llm.WithDefaultModel(cfg.PrimaryModel),
+		)
+		primaryDesc = cfg.PrimaryLLMURL + " model=" + cfg.PrimaryModel
 	}
 
-	// Wire candidate Completer from config (simulator vs HTTP URL).
 	var candidate llm.Completer = candidateSim
 	candidateDesc := "in-process candidate simulator"
 	if !cfg.UseCandidateSimulator() {
-		candidate = llm.NewCandidateClientWithTimeout(cfg.CandidateLLMURL, cfg.HTTPClientTimeout)
-		candidateDesc = cfg.CandidateLLMURL
+		candidate = llm.NewCandidateClientWithTimeout(
+			cfg.CandidateLLMURL,
+			cfg.HTTPClientTimeout,
+			llm.WithAPIKey(cfg.ModelAccessKey),
+			llm.WithDefaultModel(cfg.CandidateModel),
+		)
+		candidateDesc = cfg.CandidateLLMURL + " model=" + cfg.CandidateModel
 	}
 
 	shadowRunner := shadow.NewRunner(
@@ -81,8 +67,6 @@ func main() {
 
 	r.POST("/simulate/primary", simulator.PrimaryHandler(primarySim))
 	r.POST("/v1/primary", primaryHandler.Handle)
-
-	// Liveness/readiness for DigitalOcean App Platform (and Docker healthchecks).
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
@@ -96,13 +80,13 @@ func main() {
 		"candidate_llm", candidateDesc,
 		"shadow_timeout", cfg.ShadowTimeout.String(),
 		"shadow_max_inflight", cfg.ShadowMaxInflight,
+		"model_access_key_set", cfg.ModelAccessKey != "" && cfg.ModelAccessKey != "YOUR_MODEL_ACCESS_KEY",
 	)
 	if err := r.Run(cfg.Addr); err != nil {
 		log.Fatalf("server failed: %v", err)
 	}
 }
 
-// newLogger builds a JSON slog logger at the configured level.
 func newLogger(level config.LogLevel) *slog.Logger {
 	var lvl slog.Level
 	switch level {

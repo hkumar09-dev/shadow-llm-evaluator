@@ -1,0 +1,122 @@
+# CI + CD for shadow-llm-evaluator
+#
+# Jobs:
+#   quality  — fmt, vet, golangci-lint, app-spec validate
+#   test     — unit tests with race + coverage
+#   deploy   — DigitalOcean App Platform (main only, after quality+test)
+#
+# Required GitHub secrets (Settings → Secrets and variables → Actions):
+#   DIGITALOCEAN_ACCESS_TOKEN  — DO API token (read/write Apps)
+#   MODEL_ACCESS_KEY           — DO Inference Model Access Key (injected at deploy)
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cd-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting (gofmt)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Go vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          args: --timeout=5m
+
+      - name: Validate DigitalOcean app spec (schema)
+        uses: digitalocean/action-doctl@v2
+        with:
+          # Schema-only validation does not need a real token.
+          token: "unused"
+          no_auth: true
+
+      - name: Run app spec schema validation
+        run: doctl apps spec validate .do/app.yaml --schema-only
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download modules
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./... -race -count=1 -coverprofile=coverage.out -covermode=atomic
+
+      - name: Coverage summary
+        run: go tool cover -func=coverage.out | tail -n 1
+
+      - name: Build binary
+        run: go build -trimpath -ldflags="-s -w" -o /tmp/shadow-llm-evaluator .
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+          retention-days: 7
+
+  deploy:
+    name: Deploy to DigitalOcean
+    needs: [quality, test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy App Platform app
+        uses: digitalocean/app_action/deploy@v2
+        env:
+          # Substituted into .do/app.yaml SECRET env var MODEL_ACCESS_KEY at deploy time
+          # when the spec references ${MODEL_ACCESS_KEY} — we pass it via action env.
+          MODEL_ACCESS_KEY: ${{ secrets.MODEL_ACCESS_KEY }}
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          app_spec_location: .do/app.yaml

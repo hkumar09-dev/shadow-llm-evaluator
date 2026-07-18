@@ -1,11 +1,6 @@
 # DigitalOcean App Platform specification
-# Docs: https://docs.digitalocean.com/products/app-platform/reference/app-spec/
-#
-# Deploy:
-#   doctl auth init
-#   doctl apps create --spec .do/app.yaml
-#
-# Or connect the GitHub repo in the DigitalOcean UI and paste this spec.
+# Deployed by GitHub Actions (.github/workflows/ci-cd.yml) — deploy_on_push is off
+# so CI owns releases (avoids double builds).
 name: shadow-llm-evaluator
 region: nyc
 
@@ -14,7 +9,7 @@ services:
     github:
       repo: hkumar09-dev/shadow-llm-evaluator
       branch: main
-      deploy_on_push: true
+      deploy_on_push: false
     dockerfile_path: Dockerfile
     source_dir: /
     http_port: 8080
@@ -28,11 +23,9 @@ services:
       success_threshold: 1
       failure_threshold: 6
     envs:
-      # First deploy uses in-process LLM simulators (env/.env.local).
-      # For real LLMs: set APP_ENV=prod and override PRIMARY_LLM_URL / CANDIDATE_LLM_URL.
       - key: APP_ENV
         scope: RUN_TIME
-        value: "local"
+        value: "prod"
       - key: ENV_DIR
         scope: RUN_TIME
         value: "env"
@@ -47,12 +40,21 @@ services:
         value: "info"
       - key: PRIMARY_LLM_URL
         scope: RUN_TIME
-        value: ""
-        type: GENERAL
+        value: "https://inference.do-ai.run/v1/chat/completions"
       - key: CANDIDATE_LLM_URL
         scope: RUN_TIME
-        value: ""
-        type: GENERAL
+        value: "https://inference.do-ai.run/v1/chat/completions"
+      - key: PRIMARY_MODEL
+        scope: RUN_TIME
+        value: "router:shadow-mode-llm-evaluator"
+      - key: CANDIDATE_MODEL
+        scope: RUN_TIME
+        value: "router:shadow-mode-llm-evaluator"
+      # Injected from GitHub Actions secret MODEL_ACCESS_KEY at deploy time
+      - key: MODEL_ACCESS_KEY
+        scope: RUN_TIME
+        type: SECRET
+        value: ${MODEL_ACCESS_KEY}
       - key: SHADOW_TIMEOUT_SECONDS
         scope: RUN_TIME
         value: "30"
@@ -61,4 +63,4 @@ services:
         value: "64"
       - key: HTTP_CLIENT_TIMEOUT_SECONDS
         scope: RUN_TIME
-        value: "30"
+        value: "60"

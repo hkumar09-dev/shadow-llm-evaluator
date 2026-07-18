@@ -11,7 +11,7 @@ type Message struct {
 // ChatRequest is the JSON body accepted by POST /v1/primary
 // and forwarded to both primary and candidate LLMs.
 type ChatRequest struct {
-	Model    string    `json:"model"`                               // optional model name hint
+	Model    string    `json:"model"`                             // optional model name hint
 	Messages []Message `json:"messages" binding:"required,min=1"` // at least one message required
 }
 

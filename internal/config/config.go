@@ -44,17 +44,20 @@ const (
 )
 
 // Config holds every runtime setting used by the service.
-// Values come from the selected env/.env.* file (and can be overridden by real OS env vars).
 type Config struct {
 	AppEnv string // local | dev | qa | prod
 
-	Addr     string // HTTP listen address, e.g. ":8080"
-	GinMode  string // debug | release | test
+	Addr     string
+	GinMode  string
 	LogLevel LogLevel
 
-	// Empty URL means: use the in-process simulator for that role.
+	// DigitalOcean Inference (OpenAI-compatible).
+	// Empty URL → in-process simulator for that role.
 	PrimaryLLMURL   string
 	CandidateLLMURL string
+	PrimaryModel    string // e.g. router:shadow-mode-llm-evaluator
+	CandidateModel  string
+	ModelAccessKey  string // Authorization: Bearer <key>
 
 	ShadowTimeout     time.Duration
 	ShadowMaxInflight int
@@ -62,7 +65,7 @@ type Config struct {
 	HTTPClientTimeout time.Duration
 }
 
-// LogLevel is a thin wrapper so we can parse LOG_LEVEL from env.
+// LogLevel is parsed from LOG_LEVEL.
 type LogLevel string
 
 const (
@@ -87,7 +90,6 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("load env file %q: %w (create it or set ENV_FILE)", envFile, err)
 	}
 
-	// Re-read APP_ENV after file load in case the file itself defines it.
 	appEnv = strings.ToLower(strings.TrimSpace(envOr("APP_ENV", appEnv)))
 	if err := validateAppEnv(appEnv); err != nil {
 		return nil, err
@@ -118,6 +120,9 @@ func Load() (*Config, error) {
 		LogLevel:          logLevel,
 		PrimaryLLMURL:     strings.TrimSpace(os.Getenv("PRIMARY_LLM_URL")),
 		CandidateLLMURL:   strings.TrimSpace(os.Getenv("CANDIDATE_LLM_URL")),
+		PrimaryModel:      strings.TrimSpace(os.Getenv("PRIMARY_MODEL")),
+		CandidateModel:    strings.TrimSpace(os.Getenv("CANDIDATE_MODEL")),
+		ModelAccessKey:    strings.TrimSpace(os.Getenv("MODEL_ACCESS_KEY")),
 		ShadowTimeout:     time.Duration(shadowTimeoutSec) * time.Second,
 		ShadowMaxInflight: shadowMaxInflight,
 		HTTPClientTimeout: time.Duration(httpTimeoutSec) * time.Second,
@@ -129,9 +134,6 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// resolveEnvFile picks which file to load:
-//  1. ENV_FILE if set (exact path)
-//  2. otherwise <ENV_DIR>/.env.<APP_ENV>  (ENV_DIR defaults to "env")
 func resolveEnvFile(appEnv string) (string, error) {
 	if explicit := strings.TrimSpace(os.Getenv("ENV_FILE")); explicit != "" {
 		return explicit, nil
@@ -145,7 +147,7 @@ func resolveEnvFile(appEnv string) (string, error) {
 	return path, nil
 }
 
-// Validate checks environment-specific rules (e.g. prod must not use empty LLM URLs).
+// Validate checks environment-specific rules.
 func (c *Config) Validate() error {
 	if c.Addr == "" {
 		return fmt.Errorf("ADDR is required")
@@ -160,13 +162,21 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("HTTP_CLIENT_TIMEOUT_SECONDS must be > 0")
 	}
 
-	// In qa/prod we expect real HTTP endpoints (simulators are for local/dev only).
 	if c.AppEnv == EnvQA || c.AppEnv == EnvProd {
 		if c.PrimaryLLMURL == "" {
 			return fmt.Errorf("PRIMARY_LLM_URL is required in %s", c.AppEnv)
 		}
 		if c.CandidateLLMURL == "" {
 			return fmt.Errorf("CANDIDATE_LLM_URL is required in %s", c.AppEnv)
+		}
+		if c.ModelAccessKey == "" || c.ModelAccessKey == "YOUR_MODEL_ACCESS_KEY" {
+			return fmt.Errorf("MODEL_ACCESS_KEY is required in %s (create one in DigitalOcean → Inference → Model Access Keys)", c.AppEnv)
+		}
+		if c.PrimaryModel == "" {
+			return fmt.Errorf("PRIMARY_MODEL is required in %s", c.AppEnv)
+		}
+		if c.CandidateModel == "" {
+			return fmt.Errorf("CANDIDATE_MODEL is required in %s", c.AppEnv)
 		}
 	}
 	return nil
@@ -207,7 +217,6 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-// resolveAddr prefers ADDR, then DigitalOcean's PORT, then :8080.
 func resolveAddr() string {
 	if addr := os.Getenv("ADDR"); addr != "" {
 		return addr

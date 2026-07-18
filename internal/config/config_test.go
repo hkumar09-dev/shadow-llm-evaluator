@@ -57,6 +57,9 @@ func TestLoad_prodRequiresLLMURLs(t *testing.T) {
 		"LOG_LEVEL=info\n" +
 		"PRIMARY_LLM_URL=\n" +
 		"CANDIDATE_LLM_URL=\n" +
+		"PRIMARY_MODEL=\n" +
+		"CANDIDATE_MODEL=\n" +
+		"MODEL_ACCESS_KEY=\n" +
 		"SHADOW_TIMEOUT_SECONDS=30\n" +
 		"SHADOW_MAX_INFLIGHT=32\n" +
 		"HTTP_CLIENT_TIMEOUT_SECONDS=30\n"
@@ -69,7 +72,7 @@ func TestLoad_prodRequiresLLMURLs(t *testing.T) {
 	t.Setenv("ENV_FILE", path)
 
 	if _, err := config.Load(); err == nil {
-		t.Fatal("expected error when prod URLs are empty")
+		t.Fatal("expected error when prod URLs/key/models are empty")
 	}
 }
 
@@ -77,7 +80,8 @@ func clearConfigEnv(t *testing.T) {
 	t.Helper()
 	keys := []string{
 		"APP_ENV", "ENV_FILE", "ENV_DIR", "ADDR", "GIN_MODE", "LOG_LEVEL",
-		"PRIMARY_LLM_URL", "CANDIDATE_LLM_URL",
+		"PRIMARY_LLM_URL", "CANDIDATE_LLM_URL", "PRIMARY_MODEL", "CANDIDATE_MODEL",
+		"MODEL_ACCESS_KEY",
 		"SHADOW_TIMEOUT_SECONDS", "SHADOW_MAX_INFLIGHT", "HTTP_CLIENT_TIMEOUT_SECONDS",
 	}
 	for _, k := range keys {
